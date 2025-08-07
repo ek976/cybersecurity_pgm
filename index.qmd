@@ -1,0 +1,20 @@
+---
+title: "Adaptive Inference and Timing Attacks"
+author: "Liz Kovalchuk"
+format:
+  pdf:
+    toc: true
+    number-sections: true
+    code-block-bg: true
+    code-block-border-left: "#00bfae"
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+# Introduction
+
+This project explores probabilistic modeling of timing-based side-channel attacks. 
+
+
