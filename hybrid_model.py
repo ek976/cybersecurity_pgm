@@ -20,164 +20,95 @@ from wordlike_model import (
 from timing_model import bin_timing_measurements
 
 
-def build_hybrid_model(words=None, use_ngrams=True, target_password=None):
+def build_hybrid_model(words=None, target_password=None):
     """
     Build hybrid attack model combining character and timing information.
-    
-    Network structure:
-    - G_i ∈ CHARSET: Character at position i
-    - C_i ∈ {0,1}: Correctness at position i
-    - T_i ∈ {0,1,2}: Timing observation at position i
-    
-    Edges:
-    - G_i → G_{i+1}: Character dependencies (language model)
-    - G_i → C_i: Character determines correctness
-    - C_i → T_i: Correctness affects timing
-    
-    Args:
-        words: Training words for language model
-        use_ngrams: Use trigrams (True) or bigrams (False)
-        target_password: If provided, creates deterministic correctness CPDs
-    
-    Returns:
-        DiscreteBayesianNetwork: Configured hybrid model
+    Uses only bigram character dependencies.
     """
     if words is None:
         words = get_training_words(source="hybrid", limit=5000)
     
     model = DiscreteBayesianNetwork()
     
-    # Build n-gram probabilities
-    n = 3 if use_ngrams else 2
-    ngram_counts = build_ngram_counts(words, n=n)
+    # Build bigram probabilities
+    ngram_counts = build_ngram_counts(words, n=2)
     ngram_probs = normalize_counts(ngram_counts)
     
     # Add all nodes
     for i in range(1, 11):
         model.add_node(f"G{i}")  # Character node
-        model.add_node(f"C{i}")  # Correctness node  
+        model.add_node(f"C{i}")  # Correctness node
         model.add_node(f"T{i}")  # Timing node
     
-    # Add character sequence edges
+    # Add bigram edges
     for i in range(2, 11):
         model.add_edge(f"G{i-1}", f"G{i}")
-        if use_ngrams and i > 2:
-            model.add_edge(f"G{i-2}", f"G{i}")
     
-    # Add timing attack edges
+    # Add timing edges
     for i in range(1, 11):
         model.add_edge(f"G{i}", f"C{i}")
         model.add_edge(f"C{i}", f"T{i}")
     
-    # ========== Character CPDs (from language model) ==========
+    # ========== Character CPDs ==========
     
     # First character CPD
     unigram = Counter(w[0] for w in words if w and w[0] in CHARSET_INDEX)
     total = sum(unigram.values())
-    if total > 0:
-        prob_start = [unigram.get(c, 1e-6) / total for c in CHARSET]
-    else:
-        prob_start = [1/len(CHARSET)] * len(CHARSET)
-    
+    prob_start = [unigram.get(c, 1e-6) / total if total > 0 else 1/len(CHARSET) for c in CHARSET]
     cpd_g1 = TabularCPD("G1", len(CHARSET), [[p] for p in prob_start])
     model.add_cpds(cpd_g1)
     
-    # Second character CPD (bigram)
-    values = []
-    for prev_char in CHARSET:
-        dist = ngram_probs.get((prev_char,), {})
-        prob_vector = [dist.get(c, 1e-6) for c in CHARSET]
-        prob_sum = sum(prob_vector)
-        prob_vector = [p / prob_sum for p in prob_vector]
-        values.append(prob_vector)
-    values = list(map(list, zip(*values)))
-    
-    cpd_g2 = TabularCPD("G2", len(CHARSET), values, 
-                        evidence=["G1"], evidence_card=[len(CHARSET)])
-    model.add_cpds(cpd_g2)
-    
-    # Remaining character CPDs
-    for i in range(3, 11):
-        if use_ngrams:
-            evidence = [f"G{i-2}", f"G{i-1}"]
-            evidence_card = [len(CHARSET)] * 2
-            values = []
-            for c1 in CHARSET:
-                for c2 in CHARSET:
-                    dist = ngram_probs.get((c1, c2), {})
-                    prob_vector = [dist.get(c, 1e-6) for c in CHARSET]
-                    prob_sum = sum(prob_vector)
-                    prob_vector = [p / prob_sum for p in prob_vector]
-                    values.append(prob_vector)
-            values = list(map(list, zip(*values)))
-        else:
-            evidence = [f"G{i-1}"]
-            evidence_card = [len(CHARSET)]
-            values = []
-            for prev_char in CHARSET:
-                dist = ngram_probs.get((prev_char,), {})
-                prob_vector = [dist.get(c, 1e-6) for c in CHARSET]
-                prob_sum = sum(prob_vector)
-                prob_vector = [p / prob_sum for p in prob_vector]
-                values.append(prob_vector)
-            values = list(map(list, zip(*values)))
+    # Remaining character CPDs (bigram)
+    for i in range(2, 11):
+        values = []
+        for prev_char in CHARSET:
+            dist = ngram_probs.get((prev_char,), {})
+            prob_vector = [dist.get(c, 1e-6) for c in CHARSET]
+            prob_sum = sum(prob_vector)
+            prob_vector = [p / prob_sum for p in prob_vector]
+            values.append(prob_vector)
+        values = list(map(list, zip(*values)))
         
-        cpd = TabularCPD(f"G{i}", len(CHARSET), values, 
-                        evidence=evidence, evidence_card=evidence_card)
-        model.add_cpds(cpd)
+        cpd_g = TabularCPD(f"G{i}", len(CHARSET), values,
+                           evidence=[f"G{i-1}"], evidence_card=[len(CHARSET)])
+        model.add_cpds(cpd_g)
     
     # ========== Correctness CPDs ==========
-    
-    for i in range(1, 11):
+    for i in range(1, 10+1):
         if target_password and i <= len(target_password):
-            # Deterministic CPD based on actual password
             target_char = target_password[i-1]
             if target_char in CHARSET_INDEX:
                 target_idx = CHARSET_INDEX[target_char]
-                values = []
-                for char_idx in range(len(CHARSET)):
-                    if char_idx == target_idx:
-                        values.append([0.0, 1.0])  # Correct
-                    else:
-                        values.append([1.0, 0.0])  # Incorrect
-                values = list(map(list, zip(*values)))
+                values = [[1.0 if char_idx != target_idx else 0.0 for char_idx in range(len(CHARSET))],
+                          [0.0 if char_idx != target_idx else 1.0 for char_idx in range(len(CHARSET))]]
             else:
-                # Unknown character - uniform
                 values = [[0.5] * len(CHARSET), [0.5] * len(CHARSET)]
         else:
-            # No target or beyond password length - use heuristic
-            # Higher probability of correctness for common characters
             common_chars = set('etaoinshrdlu')
             values = []
             for char in CHARSET:
                 if char.lower() in common_chars:
-                    values.append([0.7, 0.3])  # More likely correct
+                    values.append([0.7, 0.3])
                 else:
-                    values.append([0.9, 0.1])  # Less likely correct
+                    values.append([0.9, 0.1])
             values = list(map(list, zip(*values)))
         
-        cpd_c = TabularCPD(
-            f"C{i}", 2, values,
-            evidence=[f"G{i}"], evidence_card=[len(CHARSET)]
-        )
+        cpd_c = TabularCPD(f"C{i}", 2, values, evidence=[f"G{i}"], evidence_card=[len(CHARSET)])
         model.add_cpds(cpd_c)
     
     # ========== Timing CPDs ==========
-    
     for i in range(1, 11):
         cpd_t = TabularCPD(
             f"T{i}", 3,
-            [[0.8, 0.05],  # P(short | incorrect, correct)
-             [0.15, 0.25], # P(medium | incorrect, correct)
-             [0.05, 0.7]], # P(long | incorrect, correct)
+            [[0.8, 0.05],
+             [0.15, 0.25],
+             [0.05, 0.7]],
             evidence=[f"C{i}"], evidence_card=[2]
         )
         model.add_cpds(cpd_t)
     
     model.check_model()
-    print(f"Hybrid model built with {len(words)} training words")
     return model
-
 
 def run_hybrid_inference(model, observed_chars=None, timing_classes=None):
     """
@@ -418,7 +349,7 @@ def demo_hybrid_attack(secret="vegetable", known_prefix="veg", verbose=True):
         print("=" * 70)
     
     # Build model with target password for realistic correctness CPDs
-    model = build_hybrid_model(use_ngrams=True, target_password=secret)
+    model = build_hybrid_model(use_ngrams=False, target_password=secret)
     
     # Set up observed characters
     observed_chars = {}
@@ -469,9 +400,6 @@ def demo_hybrid_attack(secret="vegetable", known_prefix="veg", verbose=True):
         print("\n* = observed character")
         
         # Show advantage over individual models
-        print("\nHybrid Advantage:")
-        print(f"- Uses language patterns to predict likely characters")
-        print(f"- Uses timing to confirm/reject predictions")
         print(f"- Average confidence: {np.mean(analysis['confidence_scores']):.3f}")
         print(f"- Average P(correct): {np.mean(correctness):.3f}")
     

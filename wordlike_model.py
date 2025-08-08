@@ -51,7 +51,7 @@ def normalize_counts(counts_dict):
 # ---------------------
 # Model Building
 # ---------------------
-def build_wordlike_model(words=None, use_ngrams=True, max_length=10):
+def build_wordlike_model(words=None, use_ngrams=False, max_length=10):
     """
     Build character prediction PGM using language patterns.
     """
@@ -183,3 +183,54 @@ def get_top_k_predictions(posteriors, k=3):
         else:
             predictions[i] = [("?", 0.0)]
     return predictions
+
+def demo_wordlike_attack(partial="veg", target="vegetable", use_ngrams=False, k=3, verbose=True):
+    """
+    Quick demo for the character prediction attack.
+    Builds the model, runs inference with a known prefix, and prints a summary.
+
+    Returns: (posteriors, guess, top_predictions, observed, model)
+    """
+    # Build model
+    model = build_wordlike_model(use_ngrams=use_ngrams)
+
+    # Observed prefix -> indices
+    observed = {f"G{i+1}": CHARSET_INDEX[c] for i, c in enumerate(partial) if c in CHARSET_INDEX}
+
+    # Inference
+    posteriors = run_wordlike_inference(model, observed)
+    guess = suggest_wordlike_guess(posteriors, observed)
+    top_predictions = get_top_k_predictions(posteriors, k=k)
+
+    if verbose:
+        print("Character Prediction Attack Demo")
+        print(f"Target:  {target}")
+        print(f"Prefix:  {partial}")
+        print(f"Model:   {'trigram' if use_ngrams else 'bigram'}")
+        print("-" * 50)
+        print("Pos | Best | Top-k | Actual")
+        print("-" * 50)
+        for i in range(1, 11):
+            node = f"G{i}"
+            actual = target[i-1] if i <= len(target) else "-"
+            if node in observed:
+                best = CHARSET[observed[node]]
+                topk_str = "observed"
+            elif node in posteriors:
+                probs = posteriors[node].values
+                best_idx = int(np.argmax(probs))
+                best = CHARSET[best_idx]
+                preds = top_predictions.get(i, [])
+                topk_str = ", ".join(f"{c}({p:.2f})" for c, p in preds)
+            else:
+                best, topk_str = "?", ""
+            print(f"{i:>3} |  {best}   | {topk_str:20s} | {actual}")
+
+        # Simple accuracy on known length
+        n = min(len(guess), len(target))
+        acc = sum(guess[i] == target[i] for i in range(n)) / n if n else 0.0
+        print("-" * 50)
+        print(f"Predicted: {guess}")
+        print(f"Accuracy (first {n}): {acc:.2%}")
+
+    return posteriors, guess, top_predictions, observed, model
