@@ -9,6 +9,7 @@ import numpy as np
 from pgmpy.models import DiscreteBayesianNetwork
 from pgmpy.factors.discrete import TabularCPD
 from pgmpy.inference import VariableElimination
+from collections import Counter, defaultdict
 import time
 
 # Import components from other models
